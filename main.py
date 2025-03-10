@@ -239,7 +239,7 @@ class RAGChatbot:
 
         try:
             # Tokenize input with better truncation - ensure we're well below the max
-            max_input_length = 450  # Reduced from 512 to provide buffer
+            max_input_length = 1024  # Reduced from 512 to provide buffer
             print(f"Tokenizing input (max length: {max_input_length})...")
             inputs = self.tokenizer(
                 prompt,
@@ -258,7 +258,7 @@ class RAGChatbot:
             print("Generating response...")
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=200,  # Use max_new_tokens instead of max_length
+                max_new_tokens=700,  # Use max_new_tokens instead of max_length
                 min_new_tokens=30,   # Ensure some meaningful content
                 num_return_sequences=1,
                 temperature=0.7,
@@ -275,10 +275,6 @@ class RAGChatbot:
                 answer = response.split("Answer:")[-1].strip()
             else:
                 answer = response.strip()
-
-            print("=== Generated Answer ===")
-            print(answer)
-            print("=====================\n")
 
             return answer
 
