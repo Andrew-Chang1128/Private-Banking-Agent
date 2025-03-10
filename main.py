@@ -160,7 +160,7 @@ class RAGChatbot:
             # Return empty list in case of error
             return []
     
-    def get_stock_insights(tickers: list) -> str:
+    def get_stock_insights(self, tickers: list) -> str:
         """Fetch real-time stock prices and fundamental data."""
         insights = "Investment Insights:\n"
         print(f"Fetching insights for {tickers}")
