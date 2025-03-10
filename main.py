@@ -6,7 +6,7 @@ from chromadb.utils import embedding_functions
 from typing import List, Dict
 import numpy as np
 import os
-
+import yfinance as yf
 # Import LangChain components for PDF processing
 from langchain.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -99,7 +99,82 @@ class RAGChatbot:
         self.model = model
         self.tokenizer = tokenizer
         self.collection = collection
+        self.is_first_message = True
+        self.portfolio_tickers = []
+        self.price_info = []
 
+    def extract_tickers(self, portfolio_text: str) -> list:
+        """Extract ticker symbols from the user's portfolio text using the LLM."""
+        # Shorter, more direct prompt for faster processing
+        prompt = f"""
+        Extract ONLY stock ticker symbols from this portfolio text.
+        Return ONLY comma-separated uppercase tickers (e.g., AAPL, MSFT).
+        NO explanations, NO text after tickers.
+        
+        Example: " I have investments in Apple, Google, Palantir, Netflix, Amazon, and I also own some shares of Intel and Tesla that I bought last year
+        Output: AAPL, GOOG, PLTR, NFLX, AMZN,INTC, TSLA
+        
+        Portfolio: {portfolio_text}
+        Tickers:"""
+
+        print("Extracting tickers...")
+        
+        # Tokenize with lower max_length to process faster
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors="pt",
+            max_length=256,  # Limit input length for faster processing
+            truncation=True
+        ).to(self.model.device)
+        
+        # fast generation with minimal parameters
+        try:
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=15,    # Further reduced - we only need a few tickers
+                num_return_sequences=1,
+                pad_token_id=self.tokenizer.eos_token_id,
+                # No sampling parameters, no beam search - pure greedy decoding
+            )
+            
+            # Process result - focusing on everything after "Tickers:"
+            result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            # Extract the tickers from the result
+            if "Tickers:" in result:
+                tickers_part = result.split("Tickers:")[-1].strip()
+            else:
+                tickers_part = result.strip()
+                
+            # Clean up and extract tickers - handling any unwanted text
+            if "\n" in tickers_part:
+                tickers_part = tickers_part.split("\n")[0]
+                
+            # Process the tickers
+            tickers = [ticker.strip().upper() for ticker in tickers_part.split(',') if ticker.strip()]
+            print(f"Extracted tickers: {tickers}")
+            return tickers
+            
+        except Exception as e:
+            print(f"Error extracting tickers: {str(e)}")
+            # Return empty list in case of error
+            return []
+    
+    def get_stock_prices(self, tickers: list) -> str:
+        """Get current stock prices for the given tickers using yfinance."""
+        price_info = "Current Portfolio Prices:\n"
+        print(f"Getting stock prices for {tickers}")
+        for ticker in tickers:
+            try:
+                stock = yf.Ticker(ticker)
+                # Get the most recent price data
+                current_price = stock.history(period="1d")['Close'].iloc[-1]
+                price_info += f"- {ticker}: ${current_price:.2f}\n"
+            except Exception as e:
+                price_info += f"- {ticker}: Unable to retrieve price (Error: {str(e)})\n"
+                
+        return price_info
+    
     def retrieve_context(self, question: str, n_results: int = 2) -> str:
         """Retrieve relevant context from the vector database."""
         # Limit the number of tokens to retrieve to prevent exceeding model limits
@@ -133,7 +208,7 @@ class RAGChatbot:
 
     def generate_response(self, question: str, context: str) -> str:
         """Generate a response using the LLM based on the question and context."""
-        prompt = f"""Context: {context}
+        prompt = f"""as a financial advisor, answer the question based on the Context: {context}
 
         Question: {question}
 
@@ -193,15 +268,28 @@ class RAGChatbot:
             print(f"Error: {str(e)}")
             print("=====================\n")
             return f"I encountered an error while generating a response: {str(e)}. Try asking a shorter question."
-
+    
     def chat(self, question: str) -> str:
         """Process a single chat interaction."""
         print("\n=== User Question ===")
         print(question)
         print("=====================\n")
-
+        
+        # Check if this is the first message (likely containing portfolio information)
+        if self.is_first_message:
+            self.is_first_message = False
+            self.portfolio_tickers = self.extract_tickers(question)
+            
+            if self.portfolio_tickers:
+                price_info = self.get_stock_prices(self.portfolio_tickers)
+                self.price_info = price_info
+                context = self.retrieve_context(question)
+                response = self.generate_response(question, context)
+                return f"{price_info}\n\n{response}"
+        
+        # Normal RAG flow for subsequent messages
         context = self.retrieve_context(question)
-        response = self.generate_response(question, context)
+        response = self.generate_response(question, context + self.price_info)
         return response
 
 class SimpleRAGRetriever:
@@ -257,10 +345,15 @@ def main():
     chatbot = RAGChatbot(model, tokenizer, collection)
 
     print("Chatbot initialized! Type 'exit' to end the conversation.\n")
-
+    
+    first_message = True
     # Chat loop
     while True:
-        question = input("You: ")
+        if first_message:
+            question = input("Input your portfolio: ")
+            first_message = False
+        else:
+            question = input("You: ")
 
         if question.lower() == 'exit':
             print("\nGoodbye!")
@@ -271,3 +364,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# I have investments in Apple, Google, Palantir, Netflix, Amazon and I also own some shares of Intel and Tesla that I bought last year
