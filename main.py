@@ -101,7 +101,7 @@ class RAGChatbot:
         self.collection = collection
         self.is_first_message = True
         self.portfolio_tickers = []
-        self.price_info = []
+        self.stock_insights = []
 
     def extract_tickers(self, portfolio_text: str) -> list:
         """Extract ticker symbols from the user's portfolio text using the LLM."""
@@ -160,20 +160,39 @@ class RAGChatbot:
             # Return empty list in case of error
             return []
     
-    def get_stock_prices(self, tickers: list) -> str:
-        """Get current stock prices for the given tickers using yfinance."""
-        price_info = "Current Portfolio Prices:\n"
-        print(f"Getting stock prices for {tickers}")
+    def get_stock_insights(tickers: list) -> str:
+        """Fetch real-time stock prices and fundamental data."""
+        insights = "Investment Insights:\n"
+        print(f"Fetching insights for {tickers}")
+
         for ticker in tickers:
             try:
                 stock = yf.Ticker(ticker)
-                # Get the most recent price data
-                current_price = stock.history(period="1d")['Close'].iloc[-1]
-                price_info += f"- {ticker}: ${current_price:.2f}\n"
+                info = stock.info
+
+                # Get price, P/E ratio, market cap, revenue, and earnings
+                current_price = info.get("currentPrice", "N/A")
+                pe_ratio = info.get("trailingPE", "N/A")
+                market_cap = info.get("marketCap", "N/A")
+                revenue = info.get("totalRevenue", "N/A")
+                net_income = info.get("netIncomeToCommon", "N/A")
+                debt_to_equity = info.get("debtToEquity", "N/A")
+
+                insights += f"""
+                - {ticker}:
+                    Price: ${current_price}
+                    P/E Ratio: {pe_ratio}
+                    Market Cap: {market_cap}
+                    Revenue: {revenue}
+                    Net Income: {net_income}
+                    Debt-to-Equity Ratio: {debt_to_equity}\n
+                """
+
             except Exception as e:
-                price_info += f"- {ticker}: Unable to retrieve price (Error: {str(e)})\n"
-                
-        return price_info
+                insights += f"- {ticker}: Unable to retrieve data (Error: {str(e)})\n"
+
+        return insights
+
     
     def retrieve_context(self, question: str, n_results: int = 2) -> str:
         """Retrieve relevant context from the vector database."""
@@ -281,15 +300,15 @@ class RAGChatbot:
             self.portfolio_tickers = self.extract_tickers(question)
             
             if self.portfolio_tickers:
-                price_info = self.get_stock_prices(self.portfolio_tickers)
-                self.price_info = price_info
+                stock_insights = self.get_stock_insights(self.portfolio_tickers)
+                self.stock_insights = stock_insights
                 context = self.retrieve_context(question)
                 response = self.generate_response(question, context)
-                return f"{price_info}\n\n{response}"
+                return f"{stock_insights}\n\n{response}"
         
         # Normal RAG flow for subsequent messages
         context = self.retrieve_context(question)
-        response = self.generate_response(question, context + self.price_info)
+        response = self.generate_response(question, context + self.stock_insights)
         return response
 
 class SimpleRAGRetriever:
