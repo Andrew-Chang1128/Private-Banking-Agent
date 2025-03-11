@@ -38,18 +38,18 @@ def create_vector_database(pdf_directory="./"):
 
     # Delete existing collection if it exists
     try:
-        client.delete_collection("multilingual_docs")
+        client.delete_collection("financial_docs")
     except:
         pass  # Collection doesn't exist, which is fine
 
-    # Create a collection with multilingual embedding function
+    # Create a collection with finance-optimized embedding function
     embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="paraphrase-multilingual-mpnet-base-v2"
+        model_name="sentence-transformers/all-mpnet-base-v2"  # High-quality model optimized for financial text
     )
-    collection = client.create_collection("multilingual_docs", embedding_function=embedding_function)
+    collection = client.create_collection("financial_docs", embedding_function=embedding_function)
 
     # Process PDF files from the directory using LangChain
-    print(f"Processing PDF files from {pdf_directory} using LangChain...")
+    print(f"Processing financial documents from {pdf_directory} using LangChain...")
 
     try:
         # Use LangChain DirectoryLoader to load all PDFs in the directory
@@ -61,13 +61,13 @@ def create_vector_database(pdf_directory="./"):
 
         # Load documents
         documents = loader.load()
-        print(f"Loaded {len(documents)} document pages")
+        print(f"Loaded {len(documents)} financial document pages")
 
         if not documents:
-            print("No documents were loaded from the PDF files")
+            print("No financial documents were loaded from the PDF files")
             return collection
 
-        # Use text splitter to create smaller chunks
+        # Use text splitter to create smaller chunks optimized for financial content
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -75,21 +75,21 @@ def create_vector_database(pdf_directory="./"):
         )
 
         chunks = text_splitter.split_documents(documents)
-        print(f"Split into {len(chunks)} chunks")
+        print(f"Split into {len(chunks)} financial content chunks")
 
         # Prepare documents and IDs for ChromaDB
         doc_texts = [chunk.page_content for chunk in chunks]
-        doc_ids = [f"doc_{i}" for i in range(len(doc_texts))]
+        doc_ids = [f"fin_doc_{i}" for i in range(len(doc_texts))]
 
         # Add documents to the collection
-        print(f"Adding {len(doc_texts)} document chunks to vector database")
+        print(f"Adding {len(doc_texts)} financial document chunks to vector database")
         collection.add(
             documents=doc_texts,
             ids=doc_ids
         )
 
     except Exception as e:
-        print(f"Error processing PDF files: {e}")
+        print(f"Error processing financial PDF files: {e}")
 
     return collection
 
