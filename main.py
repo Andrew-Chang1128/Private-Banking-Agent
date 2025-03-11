@@ -214,53 +214,74 @@ class RAGChatbot:
 
         return statement
 
-    
-    def retrieve_context(self, question: str, n_results: int = 2) -> str:
+    def retrieve_context(self, question: str, n_results: int = 5) -> str:
         """Retrieve relevant context from the vector database."""
-        # Limit the number of tokens to retrieve to prevent exceeding model limits
+        # Fetch relevant documents
         results = self.collection.query(
             query_texts=[question],
             n_results=n_results
         )
 
-        # Get all contexts
+        # Extract context from results
         contexts = results['documents'][0]
 
-        # Join contexts but ensure we're not creating something too long
-        # Estimate roughly 4 chars per token as a conservative measure
-        max_context_chars = 1500  # ~375 tokens, leaving room for question and overhead
+        # Define max character count
+        max_context_chars = 1500  # Limit to ~375 tokens
 
+        # Prioritize relevant contexts containing tickers from the user's portfolio
+        relevant_contexts = [ctx for ctx in contexts if any(ticker in ctx for ticker in self.portfolio_tickers)]
+        
+        # If no directly relevant contexts, use any retrieved ones
+        if not relevant_contexts:
+            relevant_contexts = contexts  
+
+        # Build combined context with max character limit
         combined_context = ""
-        for ctx in contexts:
-            # If adding this context would make the combined context too long, stop
+        for ctx in relevant_contexts:
             if len(combined_context) + len(ctx) > max_context_chars:
-                combined_context += "... (additional context truncated to fit model limits)"
-                break
+                break  # Stop before exceeding max length
             combined_context += ctx + " "
 
-        context = combined_context.strip()
+        # Ensure clean formatting and trimming
+        context = " ".join(combined_context.strip().split())  # Remove extra whitespace
 
         print("\n=== Retrieved Context ===")
-        print(context)
+        print(context)  # Display cleaned context
         print(f"Context length (characters): {len(context)}")
         print("=====================\n")
+
         return context
+
 
     def generate_response(self, question: str, context: str) -> str:
         """Generate a response using the LLM based on the question and context."""
-        prompt = f"""as a financial advisor, answer the question based on the Context: {context}
+        if "stress test" in question.lower() or "simulate scenarios" in question.lower():
+            prompt = f"""As a financial analyst, perform a stress test on the portfolio based on the provided company data.
+            
+            Context: {context}
 
-        Question: {question}
+            Identify potential risks based on historical data and current market conditions. Consider scenarios such as:
+            - Interest rate hikes or cuts
+            - Sector-specific downturns
+            - Economic recessions
+            - Supply chain disruptions
+            - Regulatory changes
 
-        Answer: """
+            Use finance equations to estimate potential percentage changes in stock prices under these conditions.
+
+            Answer:"""
+        else:
+            prompt = f"""As a financial advisor, answer the question based on the Context: {context}
+
+            Question: {question}
+
+            Answer: """
 
         print("=== Generated Prompt ===")
-        print(prompt)
+        print(" ".join(prompt.split()))
         print("=====================\n")
-
         try:
-            # Tokenize input with better truncation - ensure we're well below the max
-            max_input_length = 1024  # Reduced from 512 to provide buffer
+            max_input_length = 1024 
             print(f"Tokenizing input (max length: {max_input_length})...")
             inputs = self.tokenizer(
                 prompt,
@@ -275,23 +296,20 @@ class RAGChatbot:
             if input_length > max_input_length:
                 print(f"⚠️ Warning: Input was truncated from {input_length} to {max_input_length} tokens")
 
-            # Generate response with max_new_tokens instead of max_length as recommended
             print("Generating response...")
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=700,  # Use max_new_tokens instead of max_length
-                min_new_tokens=30,   # Ensure some meaningful content
+                max_new_tokens=700, 
+                min_new_tokens=30, 
                 num_return_sequences=1,
                 temperature=0.7,
                 top_p=0.9,
-                do_sample=True,  # Use sampling for faster generation
+                do_sample=True, 
                 pad_token_id=self.tokenizer.eos_token_id
             )
 
-            # Decode and return response - use skip_special_tokens
             response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-            # Extract the answer from the full response
             if "Answer:" in response:
                 answer = response.split("Answer:")[-1].strip()
             else:
@@ -311,7 +329,6 @@ class RAGChatbot:
         print(question)
         print("=====================\n")
         
-        # Check if this is the first message (likely containing portfolio information)
         if self.is_first_message:
             self.is_first_message = False
             self.portfolio_tickers = self.extract_tickers(question)
@@ -323,7 +340,6 @@ class RAGChatbot:
                 response = self.generate_response(question, context)
                 return f"{stock_insights}\n\n{response}"
         
-        # Normal RAG flow for subsequent messages
         context = self.retrieve_context(question)
         response = self.generate_response(question, context + self.stock_insights)
         return response
@@ -341,24 +357,21 @@ class SimpleRAGRetriever:
         print(question)
         print("=====================\n")
 
-        # Retrieve relevant context
         results = self.collection.query(
             query_texts=[question],
-            n_results=3  # Get more results since we're not using an LLM
+            n_results=3 
         )
 
         contexts = results['documents'][0]
 
         print("\n=== Retrieved Contexts ===")
         for i, ctx in enumerate(contexts, 1):
-            print(f"Context {i}: {ctx[:100]}...")  # Show preview of each context
+            print(f"Context {i}: {ctx[:100]}...")
         print("=====================\n")
 
-        # Format and return the relevant passages as the response
         response = "Based on the documents I've found:\n\n"
 
-        # Make sure we don't exceed reasonable length
-        max_context_display_chars = 500  # Limit each context display
+        max_context_display_chars = 500
 
         for i, context in enumerate(contexts, 1):
             if len(context) > max_context_display_chars:
