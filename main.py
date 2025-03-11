@@ -151,7 +151,7 @@ class RAGChatbot:
                 tickers_part = tickers_part.split("\n")[0]
                 
             # Process the tickers
-            tickers = [ticker.strip().upper() for ticker in tickers_part.split(',') if ticker.strip()]
+            tickers = [ticker.strip().upper().replace('"', '') for ticker in tickers_part.split(',') if ticker.strip()]
             print(f"Extracted tickers: {tickers}")
             return tickers
             
