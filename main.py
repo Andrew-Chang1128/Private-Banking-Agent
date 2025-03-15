@@ -7,9 +7,9 @@ from typing import List, Dict
 import numpy as np
 import os
 import yfinance as yf
-# Import LangChain components for PDF processing
 from langchain.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from transformers import BertTokenizer, BertForSequenceClassification, pipeline
 
 
 def setup_model_and_tokenizer():
@@ -33,41 +33,34 @@ def create_vector_database(pdf_directory="./"):
     Returns:
         ChromaDB collection with document contents
     """
-    # Initialize ChromaDB client
     client = chromadb.Client()
 
-    # Delete existing collection if it exists
     try:
-        client.delete_collection("financial_docs")
+        client.delete_collection("multilingual_docs")
     except:
-        pass  # Collection doesn't exist, which is fine
+        pass
 
-    # Create a collection with finance-optimized embedding function
     embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="sentence-transformers/all-mpnet-base-v2"  # High-quality model optimized for financial text
+        model_name="paraphrase-multilingual-mpnet-base-v2"
     )
-    collection = client.create_collection("financial_docs", embedding_function=embedding_function)
+    collection = client.create_collection("multilingual_docs", embedding_function=embedding_function)
 
-    # Process PDF files from the directory using LangChain
-    print(f"Processing financial documents from {pdf_directory} using LangChain...")
+    print(f"Processing PDF files from {pdf_directory} using LangChain...")
 
     try:
-        # Use LangChain DirectoryLoader to load all PDFs in the directory
         loader = DirectoryLoader(
             pdf_directory,
-            glob="*.pdf",  # Load all PDFs, including in subdirectories
+            glob="*.pdf",
             loader_cls=PyPDFLoader
         )
 
-        # Load documents
         documents = loader.load()
-        print(f"Loaded {len(documents)} financial document pages")
+        print(f"Loaded {len(documents)} document pages")
 
         if not documents:
-            print("No financial documents were loaded from the PDF files")
+            print("No documents were loaded from the PDF files")
             return collection
 
-        # Use text splitter to create smaller chunks optimized for financial content
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -75,37 +68,42 @@ def create_vector_database(pdf_directory="./"):
         )
 
         chunks = text_splitter.split_documents(documents)
-        print(f"Split into {len(chunks)} financial content chunks")
+        print(f"Split into {len(chunks)} chunks")
 
-        # Prepare documents and IDs for ChromaDB
         doc_texts = [chunk.page_content for chunk in chunks]
-        doc_ids = [f"fin_doc_{i}" for i in range(len(doc_texts))]
+        doc_ids = [f"doc_{i}" for i in range(len(doc_texts))]
 
-        # Add documents to the collection
-        print(f"Adding {len(doc_texts)} financial document chunks to vector database")
+        print(f"Adding {len(doc_texts)} document chunks to vector database")
         collection.add(
             documents=doc_texts,
             ids=doc_ids
         )
 
     except Exception as e:
-        print(f"Error processing financial PDF files: {e}")
+        print(f"Error processing PDF files: {e}")
 
     return collection
 
+def setup_finbert():
+    """Load FinBERT model for sentiment analysis."""
+    finbert = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-tone', num_labels=3)
+    tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-tone')
+    nlp = pipeline("text-classification", model=finbert, tokenizer=tokenizer)
+    return nlp
+
 class RAGChatbot:
-    def __init__(self, model, tokenizer, collection):
+    def __init__(self, model, tokenizer, collection, finbert_nlp):
         """Initialize the RAG chatbot with model, tokenizer, and document collection."""
         self.model = model
         self.tokenizer = tokenizer
         self.collection = collection
+        self.finbert_nlp = finbert_nlp
         self.is_first_message = True
         self.portfolio_tickers = []
         self.stock_insights = []
 
     def extract_tickers(self, portfolio_text: str) -> list:
         """Extract ticker symbols from the user's portfolio text using the LLM."""
-        # Shorter, more direct prompt for faster processing
         prompt = f"""
         Extract ONLY stock ticker symbols from this portfolio text.
         Return ONLY comma-separated uppercase tickers (e.g., AAPL, MSFT).
@@ -119,45 +117,37 @@ class RAGChatbot:
 
         print("Extracting tickers...")
         
-        # Tokenize with lower max_length to process faster
         inputs = self.tokenizer(
             prompt, 
             return_tensors="pt",
-            max_length=256,  # Limit input length for faster processing
+            max_length=256,
             truncation=True
         ).to(self.model.device)
         
-        # fast generation with minimal parameters
         try:
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=15,    # Further reduced - we only need a few tickers
+                max_new_tokens=15,
                 num_return_sequences=1,
                 pad_token_id=self.tokenizer.eos_token_id,
-                # No sampling parameters, no beam search - pure greedy decoding
             )
             
-            # Process result - focusing on everything after "Tickers:"
             result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
             
-            # Extract the tickers from the result
             if "Tickers:" in result:
                 tickers_part = result.split("Tickers:")[-1].strip()
             else:
                 tickers_part = result.strip()
                 
-            # Clean up and extract tickers - handling any unwanted text
             if "\n" in tickers_part:
                 tickers_part = tickers_part.split("\n")[0]
                 
-            # Process the tickers
             tickers = [ticker.strip().upper().replace('"', '') for ticker in tickers_part.split(',') if ticker.strip()]
             print(f"Extracted tickers: {tickers}")
             return tickers
             
         except Exception as e:
             print(f"Error extracting tickers: {str(e)}")
-            # Return empty list in case of error
             return []
     
     def get_stock_insights(self, tickers: list) -> str:
@@ -170,7 +160,6 @@ class RAGChatbot:
                 stock = yf.Ticker(ticker)
                 info = stock.info
 
-                # Get price, P/E ratio, market cap, revenue, and earnings
                 current_price = info.get("currentPrice", "N/A")
                 pe_ratio = info.get("trailingPE", "N/A")
                 market_cap = info.get("marketCap", "N/A")
@@ -193,64 +182,52 @@ class RAGChatbot:
 
         return insights
     
-    def FinBERT_FLS_specifier(self, content: str) -> str:
-        """Input a piece of financial content and return a statement generated by FinBERT."""
-        # setup model
-        from transformers import BertTokenizer, BertForSequenceClassification, pipeline
-        finbert = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-fls', num_labels=3)
-        tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-fls')
-        nlp = pipeline("text-classification", model=finbert, tokenizer=tokenizer)
-        print("Initializing FinBERT model...\n")
-
-        # usage
-        results = nlp([content])
-        label, score = results[0]['label'], results[0]['score']
-        financial_interpretation = {
-            'Specific FLS': 'Specific Forward-Looking Statement',
-            'Not FLS': 'Non-Forward-Looking Statement',
-            'Non-specific FLS': 'General Forward-Looking Statement'
-        }
-        statement = f"FinBERT Analysis:\n Classification - {financial_interpretation[label]}\n Confidence score: {score:.4f}"
-
-        return statement
+    def analyze_sentiment(self, texts: List[str]) -> Dict[str, str]:
+        """Analyze sentiment of retrieved document contexts using FinBERT."""
+        sentiments = {}
+        for text in texts:
+            result = self.finbert_nlp(text[:512])
+            label = result[0]['label']
+            sentiments[text] = label
+        return sentiments
 
     def retrieve_context(self, question: str, n_results: int = 5) -> str:
         """Retrieve relevant context from the vector database."""
-        # Fetch relevant documents
+
         results = self.collection.query(
             query_texts=[question],
             n_results=n_results
         )
 
-        # Extract context from results
         contexts = results['documents'][0]
 
-        # Define max character count
-        max_context_chars = 1500  # Limit to ~375 tokens
+        sentiment_results = self.analyze_sentiment(contexts)
+        
+        sentiment_summary = "\nSentiment Analysis of Retrieved Documents:\n"
+        for context, sentiment in sentiment_results.items():
+            summary_text = " ".join(context.split())
+            sentiment_summary += f"- [{sentiment}] {summary_text[:100]}...\n"
 
-        # Prioritize relevant contexts containing tickers from the user's portfolio
+        max_context_chars = 1500
+
         relevant_contexts = [ctx for ctx in contexts if any(ticker in ctx for ticker in self.portfolio_tickers)]
         
-        # If no directly relevant contexts, use any retrieved ones
         if not relevant_contexts:
             relevant_contexts = contexts  
 
-        # Build combined context with max character limit
         combined_context = ""
         for ctx in relevant_contexts:
             if len(combined_context) + len(ctx) > max_context_chars:
-                break  # Stop before exceeding max length
+                break
             combined_context += ctx + " "
 
-        # Ensure clean formatting and trimming
-        context = " ".join(combined_context.strip().split())  # Remove extra whitespace
+        context = " ".join(combined_context.strip().split())
 
-        print("\n=== Retrieved Context ===")
-        print(context)  # Display cleaned context
-        print(f"Context length (characters): {len(context)}")
-        print("=====================\n")
-
-        return context
+        print("\n=== Retrieved Context with Sentiment ===")
+        print(sentiment_summary)
+        print("=====================")
+        
+        return context, sentiment_summary
 
 
     def generate_response(self, question: str, context: str) -> str:
@@ -278,7 +255,7 @@ class RAGChatbot:
             Answer: """
 
         print("=== Generated Prompt ===")
-        print(" ".join(prompt.split()))
+        print(prompt.replace("\\n", "\n")) 
         print("=====================\n")
         try:
             max_input_length = 1024 
@@ -308,7 +285,7 @@ class RAGChatbot:
                 pad_token_id=self.tokenizer.eos_token_id
             )
 
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True).replace("\\n", "\n")
 
             if "Answer:" in response:
                 answer = response.split("Answer:")[-1].strip()
@@ -339,10 +316,12 @@ class RAGChatbot:
                 context = self.retrieve_context(question)
                 response = self.generate_response(question, context)
                 return f"{stock_insights}\n\n{response}"
+
+        context, sentiment_summary = self.retrieve_context(question)
+        response = self.generate_response(question, context + sentiment_summary.replace("\\n", "\n") + self.stock_insights)
         
-        context = self.retrieve_context(question)
-        response = self.generate_response(question, context + self.stock_insights)
-        return response
+        return f"{sentiment_summary}\n\n{response}"
+    
 
 class SimpleRAGRetriever:
     """A simpler RAG implementation that just returns relevant context without an LLM."""
@@ -388,15 +367,14 @@ def main():
     """Main function to run the chatbot."""
     print("Initializing Multilingual RAG Chatbot...")
 
-    # Setup components
     model, tokenizer = setup_model_and_tokenizer()
     collection = create_vector_database()
-    chatbot = RAGChatbot(model, tokenizer, collection)
+    finbert_nlp = setup_finbert()
+    chatbot = RAGChatbot(model, tokenizer, collection, finbert_nlp)
 
     print("Chatbot initialized! Type 'exit' to end the conversation.\n")
     
     first_message = True
-    # Chat loop
     while True:
         if first_message:
             question = input("Input your portfolio: ")
@@ -413,4 +391,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-# I have investments in Apple, Google, Palantir, Netflix, Amazon and I also own some shares of Intel and Tesla that I bought last year
