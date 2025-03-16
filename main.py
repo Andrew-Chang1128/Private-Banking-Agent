@@ -36,14 +36,14 @@ def create_vector_database(pdf_directory="./"):
     client = chromadb.Client()
 
     try:
-        client.delete_collection("multilingual_docs")
+        client.delete_collection("news_docs")
     except:
         pass
 
     embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="paraphrase-multilingual-mpnet-base-v2"
+        model_name="all-MiniLM-L6-v2"
     )
-    collection = client.create_collection("multilingual_docs", embedding_function=embedding_function)
+    collection = client.create_collection("news_docs", embedding_function=embedding_function)
 
     print(f"Processing PDF files from {pdf_directory} using LangChain...")
 
@@ -365,7 +365,7 @@ class SimpleRAGRetriever:
 
 def main():
     """Main function to run the chatbot."""
-    print("Initializing Multilingual RAG Chatbot...")
+    print("Initializing RAG Chatbot...")
 
     model, tokenizer = setup_model_and_tokenizer()
     collection = create_vector_database()
